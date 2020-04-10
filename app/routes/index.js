@@ -26,7 +26,6 @@ router.post('/upload', (req, res) => {
     });
 
   });
-  
 
 });
 
