@@ -2,8 +2,12 @@ class DropboxController {
 
   constructor() {
 
+    this.currentFolder = ['dropbox'];
+
     // Novo Evento para ouvir a mudança da seleção dos arquivos (Personalizado)
     this.onselectionchange = new Event('selectionchange');
+
+    this.navEl = document.querySelector('#browse-location');
 
     // Pega o botão de envio de arquivo
     this.btnSendFileEl = document.querySelector('#btn-send-file');
@@ -20,7 +24,7 @@ class DropboxController {
 
     this.connectFirebase();
     this. initEvents();
-    this.readFiles();
+    this.openFolder();
 
   }
 
@@ -49,7 +53,72 @@ class DropboxController {
 
   }
 
+  removeTask() {
+
+    let promises = [];
+
+    this.getSelection().forEach(li => {
+
+      let file = JSON.parse(li.dataset.file);
+      let key = li.dataset.key;
+
+      let formData = new FormData();
+
+      formData.append('path', file.path);
+      formData.append('key', key);
+
+      promises.push(this.ajax('/file', 'DELETE', formData));
+
+    });
+
+    return Promise.all(promises);
+
+  }
+
+
   initEvents() {
+
+    // Cria o evento em cima do botão new folder
+    this.btnNewFolder.addEventListener('click', e => {
+
+      let name = prompt('Nome da nova pasta:');
+
+      if (name) {
+        this.getFirebaseRef().push().set({
+          
+          name,
+          type: 'folder',
+          path: this.currentFolder.join('/')
+
+        });
+      }
+
+    });
+
+    // Criar o ouvinte do botão delete ao click
+    this.btnDelete.addEventListener('click', e => {
+
+      this.removeTask().then(responses => {
+
+        responses.forEach(response => {
+
+          if (response.fields.key) {
+
+            this.getFirebaseRef().child(response.fields.key).remove();
+
+          }
+
+        });
+
+        console.log('responses');
+
+      }).catch(err => {
+
+        console.error(err);
+
+      });
+
+    });
 
     // Criar o ouvinte do botão rename ao click
     this.btnRename.addEventListener('click', e => {
@@ -149,9 +218,11 @@ class DropboxController {
   }
 
   // Método que pega as referências do Firebase
-  getFirebaseRef() {
+  getFirebaseRef(path) {
 
-    return firebase.database().ref('files');
+    if (!path) path = this.currentFolder.join('/');
+
+    return firebase.database().ref(path);
 
   }
 
@@ -159,6 +230,48 @@ class DropboxController {
 
     // Exibe o modal (barra de progresso) na tela
     this.snackModalEl.style.display = (show) ? 'block' : 'none';
+
+  }
+
+  // Método que faça o ajax
+  ajax(url, method = 'GET', formData = new FormData(), onprogress = function(){}, onloadstart = function(){}) {
+
+    return new Promise((resolve, reject) => {
+
+      // Realiza a solicitação assíncrona no servidor via ajax
+      // Cria a variável ajax
+      let ajax = new XMLHttpRequest();
+
+      // Abre a conexão Ajax via POST e manda o arquivo para pasta upload
+      ajax.open(method, url);
+
+      // Confirma se o envio deu certo
+      ajax.onload = event => {
+
+        try {
+          resolve(JSON.parse(ajax.responseText));
+        } catch (e) {
+          reject(e);
+        }
+      };
+
+      // Retorna o erro caso não tenha conseguido subir o arquivo
+      ajax.onerror = event => {
+
+        reject(event);
+
+      };
+
+      // Evento da barra de progresso
+      ajax.upload.onprogress = onprogress;
+
+      // Pega em milisegundos o horário que o upload começou. 
+      // Para poder concluir o tempo estimado para conclusão do apload no médoto uploadProgress
+      onloadstart();
+
+      ajax.send(formData);
+
+    });
 
   }
 
@@ -171,50 +284,18 @@ class DropboxController {
     // Convertendo o files de collection para Array (spred), para ser inserida no Array
     [...files].forEach(file => {
 
+      let formData = new FormData();
+
+      formData.append('input-file', file);
+
       // Insere a promise no Array
-      promises.push(new Promise((resolve, reject) => {
+      promises.push(this.ajax('/upload', 'POST', formData, () => {
 
-        // Realiza a solicitação assíncrona no servidor via ajax
-        // Cria a variável ajax
-        let ajax = new XMLHttpRequest();
+        this.uploadProgress(event, file);
 
-        // Abre a conexão Ajax via POST e manda o arquivo para pasta upload
-        ajax.open('POST', '/upload');
+      }, () => {
 
-        // Confirma se o envio deu certo
-        ajax.onload = event => {
-
-          try {
-            resolve(JSON.parse(ajax.responseText));
-          } catch(e) {
-            reject(e);
-          }
-        };
-
-        // Retorna o erro caso não tenha conseguido subir o arquivo
-        ajax.onerror = event => {
-
-          reject(event);
-          
-        };
-
-        // Evento da barra de progresso
-        ajax.upload.onprogress = event => {
-
-          this.uploadProgress(event, file);
-
-        };
-
-        // Método que envia as informações via ajax
-        let formData = new FormData();
-
-        formData.append('input-file', file);
-
-        // Pega em milisegundos o horário que o upload começou. 
-        // Para poder concluir o tempo estimado para conclusão do apload no médoto uploadProgress
         this.startUploadTime = Date.now();
-        
-        ajax.send(formData);
 
       }));
 
@@ -479,6 +560,9 @@ class DropboxController {
   // Método para ler todos os dados no banco de dados do Firebase
   readFiles() {
 
+    // Seta a última pasta que entrou
+    this.lastFolder = this.currentFolder.join('/');
+
     // Listen ON
     this. getFirebaseRef().on('value', snapshot => {
 
@@ -491,8 +575,13 @@ class DropboxController {
         let key = snapshotItem.key;
         let data = snapshotItem.val();
 
-        // Adiciona na UL os novos itens que recebeu
-        this.listFilesEl.appendChild(this.getFileView(data, key));
+        // Valida que existe o item TYPE
+        if (data.type) {
+
+          // Adiciona na UL os novos itens que recebeu
+          this.listFilesEl.appendChild(this.getFileView(data, key));
+
+        }
 
       });
 
@@ -500,9 +589,94 @@ class DropboxController {
 
   }
 
+  openFolder() {
+
+    if (this.lastFolder) this.getFirebaseRef(this.lastFolder).off('value');
+
+    this.renderNav();
+    this.readFiles();
+
+  }
+
+  renderNav() {
+
+    // Cria um elemento no html
+    let nav = document.createElement('nav');
+
+    // Guarda o caminho inteiro da pasta atual
+    let path = [];
+
+    // Corre todas as pastas pegando o nome de cada uma
+    for (let i = 0; i < this.currentFolder.length; i++) {
+
+      let folderName = this.currentFolder[i];
+      let span = document.createElement('span');
+
+      // Adiciona o nome de cada pasta no path
+      path.push(folderName);
+
+      // Confirma que estamos na última pasta para nao ter link
+      if (i+1 === this.currentFolder.length) {
+
+        span.innerHTML = folderName;
+
+      } else {
+
+        span.className = 'breadcrumb-segment__wrapper';
+        span.innerHTML = `
+          <span class="ue-effect-container uee-BreadCrumbSegment-link-0">
+          <a href="#" data-path="${path.join('/')}" class="breadcrumb-segment">${folderName}</a>
+          </span>
+          <svg width="24" height="24" viewBox="0 0 24 24" class="mc-icon-template-stateless" style="top: 4px; position: relative;">
+              <title>arrow-right</title>
+              <path d="M10.414 7.05l4.95 4.95-4.95 4.95L9 15.534 12.536 12 9 8.464z" fill="#637282"
+                  fill-rule="evenodd"></path>
+          </svg>
+        `
+
+      }
+
+      // Como appendChild só recebe nó, iremos criar o span
+      nav.appendChild(span);
+
+    }
+
+    this.navEl.innerHTML = nav.innerHTML;
+
+    this.navEl.querySelectorAll('a').forEach(a => {
+
+      a.addEventListener('click', e => {
+
+        e.preventDefault();
+        this.currentFolder = a.dataset.path.split('/');
+
+        this.openFolder();
+
+      });
+    });
+  }
+
   initEventsLi(li) {
 
     li.addEventListener('click', e => {
+
+      // Criar o evento para o duplo clique
+      li.addEventListener('dblclick', e => {
+
+        let file = JSON.parse(li.dataset.file);
+
+        switch (file.type) {
+          case 'folder':
+            this.currentFolder.push(file.name);
+            this.openFolder();
+            break;
+        
+          default:
+            window.open('/file?path=' + file.path);
+            break;
+        }
+
+      });
 
       // Condicional para saber se a tecla control ou shift estão apertadas
 
